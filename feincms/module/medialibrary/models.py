@@ -235,7 +235,7 @@ class MediaFileBase(Base, TranslatedObjectMixin):
                 if image:
                     try:
                         exif = image._getexif()
-                    except (AttributeError, IOError):
+                    except (AttributeError, IOError, KeyError):
                         exif = False
 
                     if exif:
@@ -325,6 +325,10 @@ admin_thumbnail.short_description = _('Preview')
 admin_thumbnail.allow_tags = True
 
 #-------------------------------------------------------------------------
+from django.http import HttpResponse
+from django.utils import simplejson
+from django.core.files.base import ContentFile
+from os import path
 class MediaFileAdmin(admin.ModelAdmin):
     date_hierarchy    = 'created'
     inlines           = [MediaFileTranslationInline]
@@ -339,8 +343,9 @@ class MediaFileAdmin(admin.ModelAdmin):
 
         urls = super(MediaFileAdmin, self).get_urls()
         my_urls = patterns('',
-            url(r'^mediafile-bulk-upload/$', self.admin_site.admin_view(MediaFileAdmin.bulk_upload), {}, name='mediafile_bulk_upload')
-            )
+            url(r'^mediafile-bulk-upload/$', self.admin_site.admin_view(MediaFileAdmin.bulk_upload), {}, name='mediafile_bulk_upload'),
+            url(r'^mediafile-ajax-upload/$', self.admin_site.admin_view(MediaFileAdmin.ajax_upload), {}, name='mediafile_ajax_upload')
+        )
 
         return my_urls + urls
 
@@ -353,13 +358,31 @@ class MediaFileAdmin(admin.ModelAdmin):
     @staticmethod
     # 1.2 @csrf_protect
     @permission_required('medialibrary.add_mediafile')
+    def ajax_upload(request):
+        ret_val = { 'success': True }
+        try:
+            bname = request.GET['qqfile']
+            fname, ext = path.splitext(bname)
+            target_fname = slugify(fname) + ext.lower()
+            mf = MediaFile()
+            mf.file.save(target_fname, ContentFile(request.raw_post_data))
+            mf.save()
+        except Exception, e:
+            ret_val = { 'error': str(e) }
+        return HttpResponse(simplejson.dumps(ret_val), mimetype="application/json")
+        #out = open('/Users/bjarni/development/python/django/projects/handverkere/handverkere/media/medialibrary/' + filename, 'wb+')
+        #out.write(request.raw_post_data)
+        #out.close()
+
+    @staticmethod
+    # 1.2 @csrf_protect
+    @permission_required('medialibrary.add_mediafile')
     def bulk_upload(request):
         from django.core.urlresolvers import reverse
         from django.utils.functional import lazy
 
         def import_zipfile(request, category_id, data):
             import zipfile
-            from os import path
 
             category = None
             if category_id:
@@ -376,9 +399,6 @@ class MediaFileAdmin(admin.ModelAdmin):
                 count = 0
                 for zi in z.infolist():
                     if not zi.filename.endswith('/'):
-                        from django.template.defaultfilters import slugify
-                        from django.core.files.base import ContentFile
-
                         bname = path.basename(zi.filename)
                         if bname and not bname.startswith(".") and "." in bname:
                             fname, ext = path.splitext(bname)
